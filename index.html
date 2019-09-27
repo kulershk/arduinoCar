@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <style>
+        :-webkit-full-screen {
+            background-color: #f00;
+        }
+
+        /* Firefox syntax */
+        :-moz-full-screen {
+            background-color: #f00;
+        }
+
+        /* IE/Edge syntax */
+        :-ms-fullscreen {
+            background-color: #f00;
+        }
+
+        /* Standard syntax */
+        :fullscreen {
+            background-color: #f00;
+        }
+    </style>
+</head>
+<body style="position: fixed; touch-action: manipulation; width: 100vw; overscroll-behavior: none">
+<div id="container">
+    <div class="col-md-6" id="host-inputs">
+        <label for="maxPower">Max Power</label>
+        <input type="number" id="maxPower" min="0" max="195" value="50">
+        <label for="host_ip">Host IP</label>
+        <input type="text" id="host_ip" name="host_ip" value="192.168.10.221">
+        <button onclick="start()">OK</button>
+    </div>
+    <div id="message" style="display: none;">
+        <div class="left" style="float: left">Good luck</div>
+        <div class="right" style="float: right; padding-right: 20px;" id="power_level"></div>
+    </div>
+</div>
+
+<script>
+    var socket;
+    test = {
+        send: () => {}
+    }
+    function start() {
+        document.getElementById('container').requestFullscreen()
+            .then(() => {
+                const ip = document.getElementById('host_ip').value;
+                document.getElementById('host-inputs').style.display = 'none';
+                document.getElementById('message').style.display = 'block';
+                socket = new WebSocket('ws://' + ip + ':81');
+                var power = Math.min(document.getElementById('maxPower').value, 195);
+                var maxPower = power * 0.75;
+                var allowedKeys = ['W', 'S', 'A', 'D'];
+
+                window.onkeyup = function (event) {
+                    let key = event.key.toUpperCase();
+                    if (!allowedKeys.includes(key)) return;
+                    socket.send("key_released " + key);
+                }
+
+                window.onkeypress = function (event) {
+                    let key = event.key.toUpperCase();
+                    if (!allowedKeys.includes(key)) return;
+                    socket.send("key_pressed " + key + " " + power);
+                }
+                const windowWidth = window.innerWidth;
+                const windowHeight = window.innerHeight;
+                const activeNosMultiplier = 1.5;
+                const nosCooldown = 10;
+                let nosMultiplier = 1;
+                let leftTouchY = 0;
+                let leftTouchIndex = -1;
+                let rightTouchX = 0;
+                let rightTouchIndex = -1;
+                let nosActive = 0;
+                let endedNosAt = 0;
+
+                window.addEventListener('touchstart', (e) => {
+                    for (let i = 0; i < e.changedTouches.length; i++) {
+                        const touch = e.changedTouches[i];
+                        if (touch.clientX < windowWidth / 2 && leftTouchIndex === -1) {
+                            leftTouchIndex = touch.identifier;
+                            leftTouchY = touch.pageY;
+                        } else if (touch.clientX >= windowWidth / 2 && rightTouchIndex === -1) {
+                            rightTouchIndex = touch.identifier;
+                            rightTouchX = touch.pageX;
+                        }
+                    }
+                    e.preventDefault();
+                });
+
+                window.addEventListener('touchmove', (e) => {
+                    for (let i = 0; i < e.changedTouches.length; i++) {
+                        const touch = e.changedTouches[i];
+                        if (touch.identifier === leftTouchIndex) {
+                            const diff = leftTouchY - touch.pageY;
+                            const usingPower = Math.min(maxPower, (Math.abs(diff) / (windowHeight / 2)) * power)
+                            if (diff < 0) {
+                                key = "S"
+                            } else {
+                                key = "W"
+                            }
+                            socket.send("key_pressed " + key + " " + usingPower);
+                            document.getElementById('power_level').innerHTML = 'Power: ' + Math.round(usingPower);
+                        }
+                        if (touch.identifier === rightTouchIndex) {
+                            const diff = rightTouchX - touch.pageX;
+                            const usingPower = Math.min(maxPower, (Math.abs(diff) / (windowWidth / 4)) * power);
+                            if (diff > 0) {
+                                key = "A"
+                            } else {
+                                key = "D"
+                            }
+                            socket.send("key_pressed " + key + " " + usingPower);
+                        }
+                    }
+                    e.preventDefault();
+                });
+
+                window.addEventListener('touchend', (e) => {
+                    for (let i = 0; i < e.changedTouches.length; i++) {
+                        const touch = e.changedTouches[i];
+                        if (touch.identifier === leftTouchIndex) {
+                            leftTouchIndex = -1;
+                            socket.send("key_released W " + power);
+                            document.getElementById('power_level').innerHTML = 'Power: ' + 0;
+                        } else if (touch.identifier === rightTouchIndex) {
+                            rightTouchIndex = -1;
+                            socket.send("key_released D " + power);
+                        } else {
+                            leftTouchIndex = -1;
+                            rightTouchIndex = -1;
+                            socket.send("key_released W " + power);
+                            socket.send("key_released D " + power);
+                            document.getElementById('power_level').innerHTML = 'Power: ' + 0;
+                        }
+                    }
+                    e.preventDefault();
+                });
+
+                setInterval(function () {
+                    socket.send(".");
+                }, 100);
+
+                let gamepadConnected = false;
+
+                function gamepadAction() {
+                    if (gamepadConnected && socket.readyState === WebSocket.OPEN) {
+                        requestAnimationFrame(() => {
+                            const gamepads = navigator.getGamepads();
+                            if (gamepads.length > 0) {
+                                const gamePad = gamepads[0];
+                                axes = gamePad.axes;
+                                buttons = gamePad.buttons;
+                                const usingPower = Math.min(power * nosMultiplier, 195)
+                                socket.send("key_pressed W " + (-usingPower * (buttons[6].value - buttons[7].value)));
+                                if (axes[0] > 0) {
+                                    socket.send("key_released A " + (-usingPower * axes[0]));
+                                    socket.send("key_pressed D " + (usingPower * axes[0]));
+                                } else if (axes[0] < 0) {
+                                    socket.send("key_released D " + (usingPower * axes[0]));
+                                    socket.send("key_pressed A " + (-usingPower * axes[0]));
+                                } else {
+                                    socket.send("key_released D " + (usingPower * axes[0]));
+                                    socket.send("key_released A " + (-usingPower * axes[0]));
+                                }
+                                document.getElementById('power_level').innerHTML = 'Power: ' + Math.round(usingPower);
+                                if (buttons[0].value > 0.2 && (endedNosAt <= 0 || new Date().getTime() - endedNosAt > nosCooldown * 1000)) {
+                                    nosActive = true;
+                                    nosMultiplier = activeNosMultiplier;
+                                } else if (nosActive) {
+                                    nosActive = false;
+                                    nosMultiplier = 1;
+                                }
+
+                            } else {
+                                gamepadConnected = false;
+                                socket.send("key_released W " + power);
+                                socket.send("key_released D " + power);
+                            }
+                            gamepadAction();
+                        });
+                    } else {
+                        requestAnimationFrame(gamepadAction);
+                    }
+                }
+
+                window.addEventListener("gamepadconnected", (event) => {
+                    console.log("A gamepad connected:");
+                    gamepadConnected = true;
+                    gamepadAction();
+                });
+
+                window.addEventListener("gamepaddisconnected", (event) => {
+                    console.log("A gamepad disconnected:");
+                    gamepadConnected = false;
+                    socket.send("key_released W " + power);
+                    socket.send("key_released D " + power);
+                });
+
+            })
+            .catch((err) => {
+                document.getElementById('power_level').innerHTML = err.message;
+            });
+    }
+</script>
+</body>
+</html>
+
